@@ -1,6 +1,6 @@
 use super::types::{Value, VectorCommitment};
-use super::interpolate::interpolate_lagrange;
-use crate::kzg::{PublicKey, kzg_commit, kzg_open, kzg_verify};
+use super::interpolate::interpolate_with_lagrange;
+use crate::kzg::{PublicKey, kzg_open, kzg_verify};
 use ark_bls12_381::{Fr, G1Projective};
 use ark_ff::PrimeField;
 use ark_serialize::CanonicalSerialize;
@@ -41,22 +41,29 @@ pub fn value_to_scalar(value: &Value) -> Fr {
 }
 //-------------------------------------------------------------------------------------------------------
 
-//CHIAMATE
-// metodo x commitment a un vettore di 256 valori
+// xommitment "da zero": C = Σ value_to_scalar(valore_i) · vettore_pesi[i]
+// sostituisce interpolate_lagrange + kzg_commit. Il punto ottenuto è lo stesso.
 pub fn commit_vector(values: &[Value; 256], pk: &PublicKey) -> VectorCommitment {
-    
-    let mut scalars = [Fr::from(0u64); 256];
-    for i in 0..256 {
-        scalars[i] = value_to_scalar(&values[i]);
+    let mut commitment  = pk.vettore_pesi[0] * value_to_scalar(&values[0]);
+
+    for i in 1..256 {
+        commitment += pk.vettore_pesi[i] * value_to_scalar(&values[i]);
     }
-    
-    //metodo per ottenere i coef del polinomio che passa per tutti i punti Scalar
-    let coefficients = interpolate_lagrange(&scalars);
-    
-    let commitment = kzg_commit(&coefficients, pk);
-    
     VectorCommitment { inner: commitment }
 }
+
+
+// aggiornamento incrementale: cambia solo la posizione `index`.
+// C_nuovo = C_vecchio + (scalare_nuovo - scalare_vecchio) · vettore_pesi[index]
+pub fn update_commitment(old_c: VectorCommitment,index: usize,old_value: &Value,new_value: &Value,pk: &PublicKey) -> VectorCommitment {
+    let old_scalar = value_to_scalar(old_value);
+    let new_scalar = value_to_scalar(new_value);
+    
+    let delta = new_scalar - old_scalar;
+    VectorCommitment { inner: old_c.inner + pk.vettore_pesi[index] * delta }
+}
+
+//------------------------------------------------------------------
 
 
 // metodo x costruire la witness 
@@ -65,16 +72,16 @@ pub fn prove_element(
     index: usize,
     pk: &PublicKey,
 ) -> G1Projective {
-    
+
     let mut scalars = [Fr::from(0u64); 256];
     for i in 0..256 {
         scalars[i] = value_to_scalar(&values[i]);
     }
-    
-    let coefficients = interpolate_lagrange(&scalars);
-     
+
+    let coefficients = interpolate_with_lagrange(&scalars);
+
     let  witness = kzg_open(&coefficients, index, pk);
-    
+
    witness
 }
 
@@ -97,4 +104,6 @@ pub fn verify_element(
         pk,
     )
 }
+
+
 

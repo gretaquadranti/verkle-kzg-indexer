@@ -1,13 +1,20 @@
 use ark_bls12_381::Fr;
 use ark_ff::Field;
+use std::sync::OnceLock;
+
+
+static BASI: OnceLock<Vec<Vec<Fr>>> = OnceLock::new();
+
+
 //lagrange: serve per ottenere un polinomio che passa dai punti all'interno del vettore di valori 'children'
-pub fn interpolate_lagrange(values: &[Fr; 256]) -> Vec<Fr> {
+pub fn interpolate_with_lagrange(values: &[Fr; 256]) -> Vec<Fr> {
     
     let n = values.len();
+    let basi = basi_lagrange();
     let mut coefficients = vec![Fr::from(0u64); n];
     
     for i in 0..n {
-        let lagrange_poly = compute_lagrange_basis(i, n);
+        let lagrange_poly = &basi[i];
         
         //moltiplicazione tra i coef di un unico polinomio base * y
         for j in 0..n {
@@ -17,7 +24,18 @@ pub fn interpolate_lagrange(values: &[Fr; 256]) -> Vec<Fr> {
     coefficients
 }
 
+//chiamato una sola volta. verifico se vettore BASI è già stato popolato
+fn basi_lagrange() -> &'static Vec<Vec<Fr>> {
+    BASI.get_or_init(costruisci_basi)    
+    }
 
+fn costruisci_basi() -> Vec<Vec<Fr>> {
+    let mut tabella = Vec::with_capacity(256);
+    for i in 0..256 {
+        tabella.push(compute_lagrange_basis(i, 256));
+    }
+    tabella
+}
 
 // crea il polinomio base L_i(x)
 fn compute_lagrange_basis(i: usize, n: usize) -> Vec<Fr> {
@@ -75,4 +93,4 @@ fn multiply_poly_by_linear(poly: &[Fr], a: Fr) -> Vec<Fr> {
 
     result
 }
- 
+

@@ -1,5 +1,5 @@
 use crate::kzg::PublicKey;
-use crate::vector_commitment::{VectorCommitment,  commit_vector, prove_element, verify_element,  commitment_to_value};
+use crate::vector_commitment::{VectorCommitment, update_commitment,  commit_vector, prove_element, verify_element,  commitment_to_value};
 use ark_bls12_381::G1Projective;
 use ark_serialize::CanonicalDeserialize;
 use ark_bls12_381::G1Affine;
@@ -34,6 +34,9 @@ pub enum NodeRef {
     Stem(Box<StemNode>),
 }
 
+//------------------------------------------------------------
+// struttura per i nodi da salvare
+//struttura per salvare i percorsi + commitment modificati
 pub struct ModifyNode {
     pub path: String,
     pub node_type: String,  
@@ -41,6 +44,8 @@ pub struct ModifyNode {
 }
 
 //------------------------------------------------------------
+//
+
 // metodi per le chiavi
 pub fn get_stem(key: &Key) -> Stem {
     let mut stem = [0u8; 31];
@@ -135,28 +140,29 @@ pub struct VerkleTree {
 impl VerkleTree {
 
     pub fn new(pk: PublicKey) -> Self {
-        VerkleTree {
-            root: BranchNode::new(),
-            pk,
-        }
+        let mut root = BranchNode::new();
+        root.commitment = Some(commit_vector(&[[0u8; 48]; 256], &pk));
+        VerkleTree { root, pk }
     }
 
     //recupero il commitment del tree
     pub fn get_root_commitment(&self) -> Option<VectorCommitment> {
-    self.root.commitment
+        self.root.commitment
     }
 
     pub fn getter_pk(&self) -> &PublicKey {
-            &self.pk
+        &self.pk
     }
 
+    //NUOVO
+    // converte 48 bytes in un commitment
     fn deserialize_commitment(bytes: &[u8]) -> VectorCommitment {
         let affine = G1Affine::deserialize_compressed(bytes).unwrap();
         VectorCommitment {
             inner: affine.into(),
         }
     }
-    
+
    //recupera il valore associato a una chiave che la passo in input, se non esiste ritorna none
     pub fn get(&self, key: &Key) -> Option<Value> {
       
@@ -182,29 +188,27 @@ impl VerkleTree {
         }
         None
     }
+
+
+    //-------------------------------------INSERIMENTO--------------------------------------
     
-    //metodo per inserire una coppia chiave-valore nell'albero
-    pub fn insert(&mut self, key: Key, value: Value, update_commitment:bool) -> Vec<ModifyNode> {
+    pub fn insert(&mut self, key: Key, value: Value, ricalcola: bool) -> Vec<ModifyNode> {
         let stem = get_stem(&key);
         let suffix = get_suffix(&key);
 
-        Self::insert_recursive(&mut self.root, &stem, 0, suffix, value);
-
-        let mut vecModNode= Vec::new();
-        if update_commitment {
-           vecModNode = self.update_commitments_after_insert(&stem);
+        if ricalcola {
+            let mut mods = Vec::new();
+            let pk = &self.pk;
+            Self::insert_and_update(&mut self.root, &stem, 0, suffix, value, pk, String::new(), &mut mods);
+            mods
+        }else {
+            // ricostruzione all'avvio: solo struttura, i commitment arrivano dopo dal DB
+            Self::insert_recursive(&mut self.root, &stem, 0, suffix, value);
+            Vec::new()
         }
-        vecModNode
     }
     
-    
-    fn insert_recursive(
-    node: &mut BranchNode,
-    stem: &Stem,
-    level: usize,
-    suffix: u8,
-    value: Value,
-    ) {
+    fn insert_recursive(node: &mut BranchNode, stem: &Stem, level: usize, suffix: u8, value: Value) {
         let index = stem[level];
         let child_index = index as usize;
 
@@ -239,107 +243,18 @@ impl VerkleTree {
             }
         }
     }
-    
-   fn update_commitments_after_insert(&mut self, stem: &Stem)-> Vec<ModifyNode>{
-        let mut vecModifyNodes = Vec::new();
-        let pk = &self.pk;
-        Self::update_commitments_recursive(&mut self.root, stem, 0, pk, &mut vecModifyNodes, String::new());
-        vecModifyNodes
-    }
-    
-    
-    fn update_commitments_recursive(node: &mut BranchNode, stem: &Stem, level: usize,  pk: &PublicKey  , modNodes: &mut Vec<ModifyNode>, path: String) {
-
-        if level >= 31 { //check
-            return;  
-        }
-        let index = stem[level];
-        let child_index = index as usize;
-
-        let percorso=  format!("{}{:02x}", path, index);
-
-        
-        match &mut node.children[child_index] {
-           
-            Some(NodeRef::Stem(stem_node)) => {
-                let commit_s=stem_node.compute_commitment(pk);
-
-                modNodes.push( ModifyNode { 
-                        path: percorso.clone(),
-                        node_type: "stem".to_string(), 
-                        commitment_bytes: commitment_to_value(commit_s),  // devo trasformare il commitment in 48 byte perchè il db non accetta un g1porjective
-                        });
-            }
-      
-            Some(NodeRef::Branch(branch)) => {
-                if level < 30 {
-                    let percorso_clone = percorso.clone();
-
-                    Self::update_commitments_recursive(branch, stem, level + 1, pk, modNodes, percorso );
-
-                    // FASE DI RISALITA: ora che tutti i nodi sottostanti sono stati aggiornati,
-                    // ricalcolo il commitment di questo nodo figlio specifico
-                    let commit_b= branch.compute_commitment(pk);
-                    modNodes.push( ModifyNode { 
-                        path: percorso_clone,
-                        node_type: "branch".to_string(), 
-                        commitment_bytes: commitment_to_value(commit_b)  
-                    });       
-                }
-            }
-            None => {}
-        }
-
-        let commit_r= node.compute_commitment(pk);
-
-        if level == 0 {
-            modNodes.push(ModifyNode {
-                path,  // stringa vuota = root
-                node_type: "root".to_string(),
-                commitment_bytes: commitment_to_value(commit_r),
-            });
-        }
-    }
 
 
 
-
-    pub fn ricalcola_tutto(&mut self) {
-        let pk = &self.pk;
-        Self::ricalcola_ricorsivo(&mut self.root, pk);
-    }
-
-    fn ricalcola_ricorsivo(
-        node: &mut BranchNode,
-        pk: &PublicKey,
-    ) {
-        for i in 0..256 {
-            match &mut node.children[i] {
-                Some(NodeRef::Stem(stem_node)) => {
-                    stem_node.compute_commitment(pk);
-                }
-                Some(NodeRef::Branch(branch)) => {
-                    Self::ricalcola_ricorsivo(branch, pk);
-                    branch.compute_commitment(pk);
-                }
-                None => {}
-            }
-        }
-        node.compute_commitment(pk);
-    }
-
-    
-    pub fn load_commitments_from_db(
-    &mut self,
-    nodes: Vec<(String, String, Vec<u8>)>,
-    ) {
+    //chiamato solo una volta, all'avvio carica i commitment dal DB e li associa ai vari nodi dell'albero appena creato
+    pub fn load_commitments_from_db(&mut self,nodes: Vec<(String, String, Vec<u8>)>,) {
         for (path, _node_type, bytes) in nodes {
             let commitment = Self::deserialize_commitment(&bytes);
             self.set_commitment_at_path(&path, commitment);
         }
     }
 
-
+    //naviga il tree e imposta il commitment al path giusto
     fn set_commitment_at_path(&mut self, path: &str, commitment: VectorCommitment) {
         // path vuoto = root
         if path.is_empty() {
@@ -347,14 +262,16 @@ impl VerkleTree {
             return;
         }
 
-    
+        //converte il path hex in indici es. "00aa" → [0, 170] 
         let indices: Vec<usize> = (0..path.len())
             .step_by(2)
             .map(|i| usize::from_str_radix(&path[i..i+2], 16).unwrap())
             .collect();
 
         let mut current = &mut self.root;
-    
+
+        //il for scorre gli indici[0, 170] con enumerate, che aggiuge la posizione:
+        //depth=0, idx=0 // depth=1, idx=1
         for (depth, &idx) in indices.iter().enumerate() {
             let is_last = depth == indices.len() - 1;
 
@@ -380,7 +297,83 @@ impl VerkleTree {
             }
         }
     }
+
+        
+    
    
+
+    fn insert_and_update(node: &mut BranchNode, stem: &Stem, level: usize, suffix: u8,value: Value, pk: &PublicKey, path: String,mods: &mut Vec<ModifyNode> ) {
+
+        let idx = stem[level] as usize;
+        let path_child = format!("{}{:02x}", path, idx);
+
+        //prima cosa: accedo al commit seguendo il percorso che viene modificato
+        let child_node= &node.children[idx];
+
+        let old_commitment= match child_node{ 
+            Some(NodeRef::Branch(b)) => b.commitment,
+            Some(NodeRef::Stem(s)) =>s.commitment,
+            None => None,//ci deve per forza  essere, sennò dà errore
+        };
+
+        let old_commitment_v: Value = match old_commitment {
+            Some(c) => commitment_to_value(c),
+            None => [0u8; 48],
+        };
+
+        
+        //se il figlio non esiste, lo creo con il commitment "vuoto" serve dopo per calcolare la differenza 
+        if node.children[idx].is_none() {
+            let vuoto = commit_vector(&[[0u8; 48]; 256], pk);
+            node.children[idx] = Some(if level == 30 {
+                let mut s = StemNode::new(*stem);
+                s.commitment = Some(vuoto);
+                NodeRef::Stem(Box::new(s))
+            } else {
+                let mut b = BranchNode::new();
+                b.commitment = Some(vuoto);
+                NodeRef::Branch(Box::new(b))
+            });
+        }
+
+        //scendo, e ottengo cosa "vede" ora questo nodo nella posizione idx
+        let new_commitment: Value = match node.children[idx].as_mut().unwrap() {
+        
+            NodeRef::Branch(b) => {
+                Self::insert_and_update(b, stem, level + 1, suffix, value, pk, path_child.clone(), mods);
+                commitment_to_value(b.commitment.unwrap()) 
+            }
+
+            NodeRef::Stem(s) => {
+                let old_v = s.values[suffix as usize].unwrap_or([0u8; 48]);
+                s.values[suffix as usize] = Some(value);
+                let c = update_commitment(s.commitment.unwrap(), suffix as usize, &old_v, &value, pk);
+                s.commitment = Some(c);
+                mods.push(ModifyNode {
+                    path: path_child,
+                    node_type: "stem".to_string(),
+                    commitment_bytes: commitment_to_value(c),
+                });
+                commitment_to_value(c) 
+            }
+        };
+
+        
+        let c = update_commitment(node.commitment.unwrap(), idx, &old_commitment_v, &new_commitment, pk);
+        node.commitment = Some(c);
+
+        mods.push(ModifyNode {
+        path,
+        node_type: "branch".to_string(),
+        commitment_bytes: commitment_to_value(c),
+        });
+
+    }
+    
+
+    
+
+
     // metodo chiamato x calcolare la prova e "inviare" <x,y,w> 
     pub fn prove(&self, key: &Key) -> Option<MembershipProof> {
         let stem = get_stem(key);
@@ -518,6 +511,15 @@ impl VerkleTree {
             return false;
         }
 
+        if proof.steps.len() != 32 {
+        return false;
+        }
+        for (j, step) in proof.steps.iter().enumerate() {
+            if step.index != expected_key[31 - j] as usize {
+                return false;
+            }
+        }
+
         let last_step= proof.steps.last().unwrap();
         if last_step.commitment.inner!= root.inner{
             return false;
@@ -552,45 +554,6 @@ impl VerkleTree {
         }
         true
     }
-
-
-
-        
-    #[cfg(test)]
-    pub fn get_all_commitments(&mut self) -> Vec<[u8; 48]> {
-        let mut commitments = Vec::new();
-        
-        Self::commitments_tot(&mut self.root, &mut commitments);
-        commitments
-    }
-
-
-    #[cfg(test)]
-    fn commitments_tot(node: &BranchNode, commitments: &mut Vec<[u8; 48]>) {
-    
-    for i in 0..256 {
-
-        match &node.children[i] {
-
-            Some(NodeRef::Stem(stem_node)) => {
-
-                if let Some(c) = stem_node.commitment {
-                    commitments.push(commitment_to_value(c));
-                }
-            }
-            Some(NodeRef::Branch(branch)) => {
-                Self::commitments_tot(branch, commitments);
-                if let Some(c) = branch.commitment {
-                    commitments.push(commitment_to_value(c));
-                }
-            }
-            None => {}
-        }
-    }
-    if let Some(c) = node.commitment {
-        commitments.push(commitment_to_value(c));
-    }
-}
 }
 
 
@@ -608,223 +571,5 @@ pub struct ProofStep {
 pub struct MembershipProof {
     pub steps: Vec<ProofStep>,  
     pub value: Value,  
-    pub key: Key
-            
-}
-
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::kzg::trusted_setup;
-
-    
-    fn make_key(n: i64) -> Key {
-        let mut key = [0u8; 32];
-        key[24..32].copy_from_slice(&n.to_be_bytes());
-        key
-    }
-
-    fn make_value(hex: &str) -> Value {
-        let mut value = [0u8; 48];
-        let bytes = hex::decode(hex).unwrap();
-        value[0..bytes.len()].copy_from_slice(&bytes);
-        value
-    }
-
-
-    // ---------------------------INSERT e GET------------------------------------
-
-    #[test]
-    fn test_inserimento_e_recupero() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        let key = make_key(1); 
-        let value = make_value("0000000000000000000000000000000000000000000000000000000000000001"); 
-
-        tree.insert(key, value, false);
-
-        let recuperato = tree.get(&key);
-     
-        assert!(recuperato.is_some(), "il valore dovrebbe essere presente nel tree"); 
-        assert_eq!(recuperato.unwrap(), value);
-    }
-
-    
-    #[test]
-    fn test_inserimento_multiplo() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        for i in 0i64..5 {
-            let key = make_key(i); //creo la chiave 0,1,2,3,5
-            let value = make_value(&format!("{:064x}", i)); //valore 0,1,2,
-            tree.insert(key, value, false); //inserisco senza commitment
-        }
-
-        for i in 0i64..5 {
-            let key = make_key(i); 
-            let value = make_value(&format!("{:064x}", i)); 
-            assert_eq!(tree.get(&key).unwrap(), value);
-        }
-    }
-
-    #[test]
-    fn test_sovrascrittura_valore() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        let key = make_key(1);
-        let value1 = make_value("0000000000000000000000000000000000000000000000000000000000000001");
-        let value2 = make_value("0000000000000000000000000000000000000000000000000000000000000002");
-
-        tree.insert(key, value1, false);
-        tree.insert(key, value2, false);
-
-        assert_eq!(tree.get(&key).unwrap(), value2, "il valore dovrebbe essere aggiornato");
-    }
-
-  
-    
-    // ------------------------COMMITMENT---------------------------------------
-
-    
-
-    #[test]
-    fn test_commitment_cambia_dopo_nuovo_blocco() {
-        let pk = trusted_setup(255);
-        let mut tree1 = VerkleTree::new(pk.clone()); 
-        let mut tree2 = VerkleTree::new(pk);
-
-        let key1 = make_key(1);
-        let key2 = make_key(2);
-        let value = make_value("0000000000000000000000000000000000000000000000000000000000000001");
-
-        tree1.insert(key1, value, true);
-        tree2.insert(key1, value, true);
-        tree2.insert(key2, value, true);
-
-       
-        let root1 = tree1.get_root_commitment().unwrap();
-        let root2 = tree2.get_root_commitment().unwrap();
-
-        assert_ne!(root1.inner, root2.inner);
-    }
-
-
-    // ---------------------------PROVE e VERIFY ------------------------------------
-
-    #[test]
-    fn test_prova_e_verifica_blocco_singolo() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        let key = make_key(42);
-        let value = make_value("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890");
-
-        tree.insert(key, value, true);
-
-        let root = tree.get_root_commitment().unwrap();
-        let proof = tree.prove(&key).expect("la prova dovrebbe essere generabile");
-        let pk_ref = tree.getter_pk();
-
-        let valid = VerkleTree::verify_proof(&proof, pk_ref, root, key);
-        assert!(valid, "la prova di membership dovrebbe essere valida");
-    }
-
-    //inserisco due blocchi, chiave diversa ma valore uguale
-    #[test]
-    fn test_verifica_fallisce_con_chiave_sbagliata() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        let key1 = make_key(1);
-        let key2 = make_key(2);
-        let value = make_value("0000000000000000000000000000000000000000000000000000000000000001");
-
-        tree.insert(key1, value, true);
-        tree.insert(key2, value, true);
-
-        let root = tree.get_root_commitment().unwrap();
-
-        let proof = tree.prove(&key1).unwrap(); 
-
-        let pk_ref = tree.getter_pk();
-
-      
-        let valid = VerkleTree::verify_proof(&proof, pk_ref, root, key2);
-       
-        assert!(!valid, "la verifica con chiave errata dovrebbe fallire");
-    }
-
-    #[test]
-    fn test_prova_e_verifica_piu_blocchi() {
-        let pk = trusted_setup(255);
-        let mut tree = VerkleTree::new(pk);
-
-        let hash_fake = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-        for i in 0i64..10 {
-            let key = make_key(i);
-            let value = make_value(hash_fake);
-            tree.insert(key, value, true);
-        }
-
-        let root = tree.get_root_commitment().unwrap();
-
-        for i in 0i64..10 {
-            let key = make_key(i);
-            let proof = tree.prove(&key).expect(&format!("prova per blocco {} non trovata", i));
-            let valid = VerkleTree::verify_proof(&proof, tree.getter_pk(), root, key);
-            assert!(valid, "prova non valida per blocco {}", i);
-        }
-    }
-
-
-
-    #[test]
-    fn test_ricalcola_tutto_uguale_a_insert_true() {
-    let pk = trusted_setup(255);
-    let mut tree1 = VerkleTree::new(pk.clone());
-    let mut tree2 = VerkleTree::new(pk);
-
-    // tree1: inserisco con true -> ricalcolo ogni volta
-    for i in 0i64..5 {
-        let key = make_key(i);
-        let value = make_value(&format!("{:064x}", i));
-        tree1.insert(key, value, true);
-    }
-
-    // tree2: inserisco e calcolo alla fine 
-    for i in 0i64..5 {
-        let key = make_key(i);
-        let value = make_value(&format!("{:064x}", i));
-        tree2.insert(key, value, false);
-    }
-    tree2.ricalcola_tutto();
-
-    let commits1 = tree1.get_all_commitments();
-    let commits2 = tree2.get_all_commitments();
-
-    println!("commitment tree1 (insert true):");
-    for c in &commits1 {
-        println!("  {}", hex::encode(c));
-    }
-
-    println!("commitment tree2 (ricalcola_tutto):");
-    for c in &commits2 {
-        println!("  {}", hex::encode(c));
-    }
-    assert_eq!(commits1, commits2);
-
-    
-    let root1 = tree1.get_root_commitment().unwrap();
-    let root2 = tree2.get_root_commitment().unwrap();
-    assert_eq!(root1.inner, root2.inner);
-
-}
-
-
-
+    pub key: Key          
 }

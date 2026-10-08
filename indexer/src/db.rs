@@ -87,3 +87,43 @@ pub async fn get_all_blocks(pool: &PgPool)-> Result<Vec<(i64, String)>, Box<dyn 
 }
 
 
+
+//  NUOVO salva o aggiorna il commitment di un nodo
+pub async fn save_node(
+    pool: &PgPool,
+    path: &str,
+    node_type: &str,
+    commitment_bytes: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    sqlx::query(
+        "INSERT INTO verkle_nodes (node_path, node_type, commitment)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (node_path) DO UPDATE SET commitment = $3"
+    )
+    .bind(path)
+    .bind(node_type)
+    .bind(commitment_bytes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// NUOVO carica tutti i nodi salvati
+pub async fn load_all_nodes(
+    pool: &PgPool,
+) -> Result<Vec<(String, String, Vec<u8>)>, Box<dyn Error + Send + Sync>> {
+    let rows = sqlx::query(
+        "SELECT node_path, node_type, commitment FROM verkle_nodes"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let nodes = rows.iter().map(|row| {
+        let path: String  = row.get(0);
+        let ntype: String = row.get(1);
+        let comm: Vec<u8> = row.get(2);
+        (path, ntype, comm)
+    }).collect();
+
+    Ok(nodes)
+}

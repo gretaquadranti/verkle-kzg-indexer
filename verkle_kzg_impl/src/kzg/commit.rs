@@ -9,13 +9,9 @@ use ark_ec::{VariableBaseMSM,CurveGroup};
 pub fn kzg_commit(coefficients: &[Fr], pk: &PublicKey) -> G1Projective {   
 
     let punti_projective = &pk.g1_vector[0..coefficients.len()];
-
-    let mut vec_punti_affine = Vec::new();
-
-    for p in punti_projective {
-        let p_affine = p.into_affine();
-        vec_punti_affine.push(p_affine);
-    }
+    
+    //metodo notmalize_batch che permette di trasformare da punti projective a punti affini
+    let vec_punti_affine = G1Projective::normalize_batch(punti_projective);
 
     //la funzione msm prende i coef (di tipo Scalar), prende le g1*alpha (in base alle potenze) e crea il commitment 
     G1Projective::msm(&vec_punti_affine, coefficients).expect("MSM fallito")
