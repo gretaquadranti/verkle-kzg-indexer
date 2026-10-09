@@ -226,7 +226,7 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
                         if let Err(e) = db::save_node(&db, &nodes_ws.path, &nodes_ws.node_type, &nodes_ws.commitment_bytes).await {
                             eprintln!("ERRORE salvataggio nodo {}: {}. Tree e DB potrebbero essere out of sync.", nodes_ws.path, e);
-                            // se vuoi essere conservativo, puoi anche fare return per bloccare l'update del last_indexed
+                           
                             }
                         }
                     if let Err(e) = db::update_last_indexed_block(&db, num).await {
