@@ -246,7 +246,7 @@ impl VerkleTree {
 
 
 
-    //chiamato solo una volta, all'avvio carica i commitment dal DB e li associa ai vari nodi dell'albero appena creato
+    // chiamato solo una volta, all'avvio carica i commitment dal DB e li associa ai vari nodi dell'albero appena creato
     pub fn load_commitments_from_db(&mut self,nodes: Vec<(String, String, Vec<u8>)>,) {
         for (path, _node_type, bytes) in nodes {
             let commitment = Self::deserialize_commitment(&bytes);
@@ -254,7 +254,7 @@ impl VerkleTree {
         }
     }
 
-    //naviga il tree e imposta il commitment al path giusto
+    // naviga il tree e imposta il commitment al path giusto
     fn set_commitment_at_path(&mut self, path: &str, commitment: VectorCommitment) {
         // path vuoto = root
         if path.is_empty() {
@@ -262,7 +262,7 @@ impl VerkleTree {
             return;
         }
 
-        //converte il path hex in indici es. "00aa" → [0, 170] 
+        // converte il path hex in indici es. "00aa" → [0, 170] 
         let indices: Vec<usize> = (0..path.len())
             .step_by(2)
             .map(|i| usize::from_str_radix(&path[i..i+2], 16).unwrap())
@@ -310,17 +310,17 @@ impl VerkleTree {
         //prima cosa: accedo al commit seguendo il percorso che viene modificato
         let child_node= &node.children[idx];
 
-        let old_commitment= match child_node{ 
+        let old_commitment= match child_node{  //commitment del figlio del padre
             Some(NodeRef::Branch(b)) => b.commitment,
             Some(NodeRef::Stem(s)) =>s.commitment,
-            None => None,//ci deve per forza  essere, sennò dà errore
+            None => None,
         };
 
+        //o recupero il commitment del figlio e lo trasformo in value oppure se old_commitment restituisce un None allora vuol dire che non esiste quel figlio e 
         let old_commitment_v: Value = match old_commitment {
             Some(c) => commitment_to_value(c),
             None => [0u8; 48],
         };
-
         
         //se il figlio non esiste, lo creo con il commitment "vuoto" serve dopo per calcolare la differenza 
         if node.children[idx].is_none() {
@@ -341,7 +341,7 @@ impl VerkleTree {
         
             NodeRef::Branch(b) => {
                 Self::insert_and_update(b, stem, level + 1, suffix, value, pk, path_child.clone(), mods);
-                commitment_to_value(b.commitment.unwrap()) 
+                commitment_to_value(b.commitment.unwrap()) //il risultato viene poi salvato in new_commitment
             }
 
             NodeRef::Stem(s) => {
@@ -354,7 +354,7 @@ impl VerkleTree {
                     node_type: "stem".to_string(),
                     commitment_bytes: commitment_to_value(c),
                 });
-                commitment_to_value(c) 
+                commitment_to_value(c) // il risutato viene salvato in new_commitment
             }
         };
 
@@ -371,8 +371,31 @@ impl VerkleTree {
     }
     
 
-    
-
+    pub fn debug_branch_di_stem(&self, key: &Key) {
+    let stem = get_stem(key);
+    let mut cur = &self.root;
+    for &b in stem.iter().take(30) {
+        match &cur.children[b as usize] {
+            Some(NodeRef::Branch(n)) => cur = n,
+            _ => { println!("percorso interrotto"); return; }
+        }
+    }
+    // cur = branch di livello 30, il padre dello stem
+    let mut vals = [[0u8; 48]; 256];
+    let mut figli = 0;
+    for i in 0..256 {
+        if let Some(NodeRef::Stem(s)) = &cur.children[i] {
+            figli += 1;
+            match s.commitment {
+                Some(c) => vals[i] = commitment_to_value(c),
+                None => println!("stem {:02x} senza commitment", i),
+            }
+        }
+    }
+    let ricalcolato = commit_vector(&vals, &self.pk);
+    println!("figli: {}, salvato == ricalcolato? {}",
+             figli, cur.commitment.map(|c| c.inner) == Some(ricalcolato.inner));
+}
 
     // metodo chiamato x calcolare la prova e "inviare" <x,y,w> 
     pub fn prove(&self, key: &Key) -> Option<MembershipProof> {
@@ -501,59 +524,41 @@ impl VerkleTree {
 
 
     // verifica della prova
-   pub fn verify_proof(proof: &MembershipProof, pk: &PublicKey, root: VectorCommitment,  expected_key: Key) -> bool {
-    
-        if proof.key.as_ref() != expected_key.as_ref() { 
+   pub fn verify_proof(proof: &MembershipProof, pk: &PublicKey, root: VectorCommitment, expected_key: Key) -> bool {
+    if proof.key.as_ref() != expected_key.as_ref() { println!("FALLITO: chiave diversa"); return false; }
+    if proof.steps.len() != 32 { println!("FALLITO: passi = {}", proof.steps.len()); return false; }
+
+    for (j, step) in proof.steps.iter().enumerate() {
+        if step.index != expected_key[31 - j] as usize {
+            println!("FALLITO: indice al passo {} ({} invece di {})", j, step.index, expected_key[31 - j]);
             return false;
         }
-
-        if proof.steps.is_empty(){
-            return false;
-        }
-
-        if proof.steps.len() != 32 {
-        return false;
-        }
-        for (j, step) in proof.steps.iter().enumerate() {
-            if step.index != expected_key[31 - j] as usize {
-                return false;
-            }
-        }
-
-        let last_step= proof.steps.last().unwrap();
-        if last_step.commitment.inner!= root.inner{
-            return false;
-        }
-
-        let first_step= proof.steps.first().unwrap();
-        if proof.value != first_step.value{
-            return false;
-        }
-
-        for i in 1..proof.steps.len(){
-            let current_step= &proof.steps[i];
-            let prev_step = &proof.steps[i-1];
-            let prev_commitment_bytes = commitment_to_value(prev_step.commitment);
-            
-            if current_step.value !=prev_commitment_bytes{
-                return false; 
-            }
-        }
-        for step in proof.steps.iter() {
-        let valid = verify_element(
-            step.commitment,
-            step.index,
-            step.value,
-            step.witness.clone(),
-            pk,
-        );
-
-        if !valid {
-            return false;
-            }
-        }
-        true
     }
+
+    if proof.steps.last().unwrap().commitment.inner != root.inner { println!("FALLITO: radice"); return false; }
+    if proof.value != proof.steps.first().unwrap().value { println!("FALLITO: valore del primo passo"); return false; }
+
+    for i in 1..proof.steps.len() {
+        if proof.steps[i].value != commitment_to_value(proof.steps[i - 1].commitment) {
+            println!("FALLITO: catena tra passo {} e {}", i - 1, i);
+            return false;
+        }
+    }
+
+    for (i, step) in proof.steps.iter().enumerate() {
+        if !verify_element(step.commitment, step.index, step.value, step.witness.clone(), pk) {
+            println!("FALLITO: pairing al passo {}", i);
+            return false;
+        }
+    }
+    true
+}
+
+
+        
+
+
+
 }
 
 

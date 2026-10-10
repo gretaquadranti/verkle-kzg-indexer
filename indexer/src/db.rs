@@ -14,23 +14,6 @@ pub async fn get_last_indexed_block(pool: &PgPool) -> Result<i64, Box<dyn Error 
 }
 
 
-// viene chiamato ogni volta che un blocco viene salvato con successo, in modo che
-pub async fn update_last_indexed_block(
-    pool: &PgPool, 
-    block_number: i64
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    sqlx::query(
-        "UPDATE indexer_state 
-         SET last_block_indexed = $1, last_update = NOW() 
-         WHERE id = 1"
-    )
-    .bind(block_number)
-    .execute(pool)
-    .await?;
-    
-    Ok(())
-}
-
 
 pub async fn save_block(
     db_transazione: &mut Transaction<'_, Postgres>,
@@ -87,28 +70,6 @@ pub async fn get_all_blocks(pool: &PgPool)-> Result<Vec<(i64, String)>, Box<dyn 
 }
 
 
-
-//  NUOVO salva o aggiorna il commitment di un nodo
-pub async fn save_node(
-    pool: &PgPool,
-    path: &str,
-    node_type: &str,
-    commitment_bytes: &[u8],
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    sqlx::query(
-        "INSERT INTO verkle_nodes (node_path, node_type, commitment)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (node_path) DO UPDATE SET commitment = $3"
-    )
-    .bind(path)
-    .bind(node_type)
-    .bind(commitment_bytes)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-// NUOVO carica tutti i nodi salvati
 pub async fn load_all_nodes(
     pool: &PgPool,
 ) -> Result<Vec<(String, String, Vec<u8>)>, Box<dyn Error + Send + Sync>> {
@@ -126,4 +87,36 @@ pub async fn load_all_nodes(
     }).collect();
 
     Ok(nodes)
+}
+
+
+pub async fn persist_block(
+    pool: &PgPool,
+    block: &Block,
+    block_number: i64,
+    nodes: &[(String, String, Vec<u8>)],   // (path, tipo, commitment)
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut tx = pool.begin().await?;
+
+    save_block(&mut tx, block).await?;
+
+    for (path, ntype, comm) in nodes {
+        sqlx::query(
+            "INSERT INTO verkle_nodes (node_path, node_type, commitment)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (node_path) DO UPDATE SET commitment = $3")
+            .bind(path)
+            .bind(ntype)
+            .bind(comm)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    sqlx::query("UPDATE indexer_state SET last_block_indexed = $1, last_update = NOW() WHERE id = 1")
+        .bind(block_number)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
 }

@@ -3,7 +3,6 @@ mod db;
 mod alchemy;
 mod utils;
 mod api;
-use models::Block;
 use dotenv::dotenv;
 use std::env;
 use sqlx::PgPool;
@@ -28,6 +27,9 @@ fn main() {
 
     handler.join().unwrap();
 }
+
+
+
 
 
 async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -84,9 +86,13 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
     // carica i commitment esistenti dal db e li associa al nodo
     let nodes = db::load_all_nodes(&db_pool).await?;
     tree_lock.load_commitments_from_db(nodes);
+
+
+
+
+
         
     let gap = latest_on_chain - last_indexed;
-    let mut ultimo_ok = last_indexed; //variabile che serve per tener traccia dell'ultimo nodo salvato
     
     if gap > 0 {
         println!("gap detected: {} blocks", gap);
@@ -96,18 +102,18 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
             println!("elaborazione blocco {}", block_num);
 
             while tentativi <3{
-                match index_block(&alchemy_http, &db_pool, block_num).await {
+                match alchemy_http.get_block(block_num).await {
                     Ok(block) => {
                         let key   = utils::block_number_to_key(block_num);
                         let value = utils::hash_to_value(&block.hash);
-                        let vec_Mod_Nodes= tree_lock.insert(key, value,true);
-                        //chiamo il metodo che inserisce nel db 
-                        for m in vec_Mod_Nodes{
-                            if let Err(e) = db::save_node(&db_pool, &m.path, &m.node_type, &m.commitment_bytes).await {
-                                eprintln!("errore salvataggio nodo: {}", e);
-                            }                   
-                        }
-                        ultimo_ok = block_num; 
+                        
+                        let mods = tree_lock.insert(key, value, true);
+                        let nodes: Vec<(String, String, Vec<u8>)> = mods
+                        .into_iter()
+                        .map(|m| (m.path, m.node_type, m.commitment_bytes.to_vec()))
+                        .collect();
+
+                        db::persist_block(&db_pool, &block, block_num, &nodes).await?;
                         break;
                     }
                     Err(e) => {
@@ -130,13 +136,6 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
         }                   
     }    
 
-    //Perché se gap non è maggiore di zero, non c'è stato nessun catch-up da fare, e quindi non ha senso aggiornare last_indexed: è già aggiornato     
-    if gap>0 {
-        if let Err(e) = db::update_last_indexed_block(&db_pool, ultimo_ok).await {
-            eprintln!("errore update last indexed: {}", e);
-        }
-        println!("last_indexed aggiornato a {}", ultimo_ok);
-    }   
     println!("scaricamento completato");
 
     drop(tree_lock);
@@ -146,6 +145,9 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
     if let Some(root) = tree_lock.get_root_commitment() {
         println!("RADICE DEL TREE: {:?}", root);
     }
+
+
+
     drop(tree_lock);
 
        
@@ -195,11 +197,11 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
                 for num in (ultimo_blocco_letto + 1)..=block_num {
                     println!("ws: elaborazione blocco {}", num);
                        
-                    let block = match index_block(&alchemy, &db, num).await {
+                    let block = match alchemy.get_block(num).await {
                         Ok(b) => b,
                         Err(e) => { 
                             eprintln!("error indexing block {}: {}", num, e); 
-                            continue;
+                            break;
                         }
                     };
 
@@ -219,19 +221,17 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
                     let start = std::time::Instant::now();
 
-                    let vec_mod_node_ws = tree_lock.insert(key, value, true);
-                    drop(tree_lock); // rilascio il lock prima delle query al DB
+                    let mods = tree_lock.insert(key, value, true);
+                    let nodes: Vec<(String, String, Vec<u8>)> = mods
+                        .into_iter()
+                        .map(|m| (m.path, m.node_type, m.commitment_bytes.to_vec()))
+                        .collect();
 
-                    for nodes_ws in vec_mod_node_ws{
-
-                        if let Err(e) = db::save_node(&db, &nodes_ws.path, &nodes_ws.node_type, &nodes_ws.commitment_bytes).await {
-                            eprintln!("ERRORE salvataggio nodo {}: {}. Tree e DB potrebbero essere out of sync.", nodes_ws.path, e);
-                           
-                            }
-                        }
-                    if let Err(e) = db::update_last_indexed_block(&db, num).await {
-                        println!("error updating last indexed: {}", e);
+                    if let Err(e) = db::persist_block(&db, &block, num, &nodes).await {
+                        eprintln!("ERRORE persistenza blocco {}: {}. Mi fermo per non desincronizzare.", num, e);
+                        std::process::exit(1);
                     }
+                    drop(tree_lock);
                     println!("block {} indexed e inserito nel tree", num);
                     println!("inserimento web_socket: {:?}", start.elapsed());
 
@@ -264,19 +264,3 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
 }    
 
-// scarica un singolo blocco dall'RPC Alchemy, lo salva nel database
-// la transazione garantisce che un blocco non venga mai scritto parzialmente: o tutti i suoi dati vengono salvati, o niente.
-pub async fn index_block(
-    alchemy: &alchemy::AlchemyClient,
-    db_pool: &PgPool,
-    block_number: i64,
-) -> Result<Block, Box<dyn std::error::Error + Send + Sync>> {
-
-    let block = alchemy.get_block(block_number).await?;
-
-    let mut db_transazione = db_pool.begin().await?;
-    db::save_block(&mut db_transazione, &block).await?;
-    db_transazione.commit().await?;
-
-    Ok(block)
-}    
