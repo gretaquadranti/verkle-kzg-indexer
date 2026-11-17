@@ -1099,6 +1099,7 @@ dependencies = [
 name = "indexer"
 version = "0.1.0"
 dependencies = [
+ "ark-bls12-381",
  "ark-ec",
  "ark-serialize",
  "askama",
@@ -1109,6 +1110,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tokio-tungstenite",

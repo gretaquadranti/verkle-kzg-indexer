@@ -28,10 +28,6 @@ fn main() {
     handler.join().unwrap();
 }
 
-
-
-
-
 async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenv().ok();
 
@@ -75,22 +71,16 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
     //recupero tutti i blocchi dal db precedentemente salvati
     let blocks = db::get_all_blocks(&db_pool).await?;
-    for (numero, hash) in &blocks {
-        let key   = utils::block_number_to_key(*numero);
-        let value = utils::hash_to_value(hash);
-
-        tree_lock.insert(key, value,false); //FALSE perche non ricalcola commitment
+    for rec in &blocks {
+     let key   = utils::block_number_to_key(rec.number);
+        let value = utils::record_to_value(rec);
+        tree_lock.insert(key, value, false);
     }
 
     // ora che ho ricreato il verkle tree, ci posso pure aggiungere ai vari nodi i commitment
     // carica i commitment esistenti dal db e li associa al nodo
     let nodes = db::load_all_nodes(&db_pool).await?;
     tree_lock.load_commitments_from_db(nodes);
-
-
-
-
-
         
     let gap = latest_on_chain - last_indexed;
     
@@ -104,16 +94,17 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
             while tentativi <3{
                 match alchemy_http.get_block(block_num).await {
                     Ok(block) => {
-                        let key   = utils::block_number_to_key(block_num);
-                        let value = utils::hash_to_value(&block.hash);
-                        
+                        let rec   = models::BlockRecord::from_alchemy(&block)?;
+                        let key   = utils::block_number_to_key(rec.number);
+                        let value = utils::record_to_value(&rec);
+
                         let mods = tree_lock.insert(key, value, true);
                         let nodes: Vec<(String, String, Vec<u8>)> = mods
-                        .into_iter()
-                        .map(|m| (m.path, m.node_type, m.commitment_bytes.to_vec()))
-                        .collect();
+                            .into_iter()
+                            .map(|m| (m.path, m.node_type, m.commitment_bytes.to_vec()))
+                            .collect();
 
-                        db::persist_block(&db_pool, &block, block_num, &nodes).await?;
+                        db::persist_block(&db_pool, &rec, &nodes).await?;
                         break;
                     }
                     Err(e) => {
@@ -195,18 +186,23 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
                 }
 
                 for num in (ultimo_blocco_letto + 1)..=block_num {
-                    println!("ws: elaborazione blocco {}", num);
-                       
-                    let block = match alchemy.get_block(num).await {
-                        Ok(b) => b,
-                        Err(e) => { 
-                            eprintln!("error indexing block {}: {}", num, e); 
-                            break;
-                        }
-                    };
+                println!("ws: elaborazione blocco {}", num);
 
-                    let key   = utils::block_number_to_key(num);
-                    let value = utils::hash_to_value(&block.hash);
+                let block = match alchemy.get_block(num).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("error indexing block {}: {}", num, e);
+                        break;
+                    }
+                };
+
+                let rec = match models::BlockRecord::from_alchemy(&block) {
+                    Ok(r) => r,
+                    Err(e) => { eprintln!("blocco {} malformato: {}", num, e); break; }
+                };
+
+                let key   = utils::block_number_to_key(rec.number);
+                let value = utils::record_to_value(&rec);
                     
                     let mut tree_lock = tree.lock().await;
                     let ultimo_aggiornato = match db::get_last_indexed_block(&db).await{
@@ -227,7 +223,7 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
                         .map(|m| (m.path, m.node_type, m.commitment_bytes.to_vec()))
                         .collect();
 
-                    if let Err(e) = db::persist_block(&db, &block, num, &nodes).await {
+                    if let Err(e) = db::persist_block(&db, &rec, &nodes).await {
                         eprintln!("ERRORE persistenza blocco {}: {}. Mi fermo per non desincronizzare.", num, e);
                         std::process::exit(1);
                     }
@@ -244,8 +240,9 @@ async fn async_operation() -> Result<(), Box<dyn std::error::Error + Send + Sync
     // -----------------------TASK 2: API HTTP---------------------------------------
    
     let api_task = tokio::spawn(async move {
+        let db_api = Arc::clone(&db_pool);
 
-        let router = api::build_router(tree_api);
+        let router = api::build_router(tree_api, db_api);
 
         //apre la porta 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")

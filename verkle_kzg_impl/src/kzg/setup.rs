@@ -90,3 +90,9 @@ pub fn save_or_load_pk(t: usize) -> PublicKey {
         pk
     }
 }
+
+//funzione che serve per esportare la pk
+pub fn load_pk(path: &str) -> PublicKey {
+    let bytes = std::fs::read(path).expect("trusted_setup.bin non trovato");
+    PublicKey::deserialize_compressed(&bytes[..]).expect("file chiave corrotto")
+}

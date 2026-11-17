@@ -2,6 +2,8 @@ use super::setup::PublicKey;
 use ark_bls12_381::{Fr, G1Projective, Bls12_381};
 use ark_ec::pairing::Pairing;
 
+
+
 // e(C, G2) == e(w, alpha·G2 - x0·G2) · e(y·G1, G2)
 pub fn kzg_verify(
     commitment: G1Projective,
@@ -34,3 +36,5 @@ pub fn kzg_verify(
     
     lhs == rhs
 }
+
+

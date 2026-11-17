@@ -135,7 +135,7 @@ pub struct AlchemyClient {
 
 impl AlchemyClient {
     pub fn new(api_key: String) -> Self {
-        //richiesta HTTP apre una connessione, riceve la risposta e la chiude
+        //richiesta HTTP
         let http_client = Client::new();
         let url = format!("https://eth-sepolia.g.alchemy.com/v2/{}", api_key);
         

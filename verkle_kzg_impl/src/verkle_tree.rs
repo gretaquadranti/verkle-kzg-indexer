@@ -4,28 +4,26 @@ use ark_bls12_381::G1Projective;
 use ark_serialize::CanonicalDeserialize;
 use ark_bls12_381::G1Affine;
 //la chiave è un vettore da 32 byte
-pub type Key = [u8; 32];     
-pub type Value = [u8; 48];  
-pub type Stem = [u8; 31];    //primi 31 byte della chiave
-pub type Suffix = u8;        //ultimo byte 
-
+pub type Key=[u8; 32];     
+pub type Value=[u8; 48];  
+pub type Stem=[u8; 31];    //primi 31 byte della chiave
+pub type Suffix= u8;        //ultimo byte 
 
 #[derive(Debug, Clone)]
 //nodi interni, ogni nodo puo avere al max 256 figli
 pub struct BranchNode {
     //array dei 256 figli
-    pub children: [Option<NodeRef>; 256],
+    pub children:[Option<NodeRef>; 256],
     //commitment al commitment dei figli
-    pub commitment: Option<VectorCommitment>,
+    pub commitment:Option<VectorCommitment>,
 }
-
 
 #[derive(Debug, Clone)]
 //stem node, ovvero 31 byte uguali, conterrà al max 256 valori che condividono i primi 31 byte
 pub struct StemNode {
-    pub stem: Stem,
-    pub values: [Option<Value>; 256],
-    pub commitment: Option<VectorCommitment>,
+    pub stem:Stem,
+    pub values:[Option<Value>; 256],
+    pub commitment:Option<VectorCommitment>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,17 +36,16 @@ pub enum NodeRef {
 // struttura per i nodi da salvare
 //struttura per salvare i percorsi + commitment modificati
 pub struct ModifyNode {
-    pub path: String,
-    pub node_type: String,  
+    pub path:String,
+    pub node_type:String,  
     pub commitment_bytes: [u8; 48],
 }
 
 //------------------------------------------------------------
-//
 
 // metodi per le chiavi
-pub fn get_stem(key: &Key) -> Stem {
-    let mut stem = [0u8; 31];
+pub fn get_stem(key:&Key) -> Stem {
+    let mut stem=[0u8; 31];
     stem.copy_from_slice(&key[0..31]);
     stem
 }
@@ -62,101 +59,48 @@ pub fn get_suffix(key: &Key) -> Suffix {
 impl BranchNode {
     pub fn new() -> Self {
         BranchNode {
-            children: [const { None }; 256],
-            commitment: None,  
+            children:[const {None}; 256],
+            commitment:None,
         }
-    }
-    
-    // per calcolare il commitment del branchNode
-    pub fn compute_commitment(&mut self, pk: &PublicKey)-> VectorCommitment {    
-        
-        let mut child_values = [[0u8; 48]; 256];
-        
-        for i in 0..256 {
-            match &self.children[i] {
-                None => {
-                    //lascio lo zero che c'è dall'iniizializzazione
-                }
-                
-                 Some(NodeRef::Stem(stem_node)) => {
-                    if let Some(commitment) = stem_node.commitment {
-                        child_values[i] = commitment_to_value(commitment);
-                    }
-                }
-
-                 Some(NodeRef::Branch(branch_node)) => {
-                    if let Some(commitment) = branch_node.commitment {
-                        child_values[i] = commitment_to_value(commitment);
-                    }
-                }
-            }
-        }
-        let commitment = commit_vector(&child_values, pk);  
-        
-        self.commitment = Some(commitment); 
-        commitment
     }
 }
 
-
-
 impl StemNode {
-
     pub fn new(stem: Stem) -> Self {
         StemNode {
             stem,
-            values: [const { None }; 256],
-            commitment: None, 
+            values:[const {None}; 256],
+            commitment:None,
         }
-    }
-
-    // commitment per gli StemNode: fa commitment ai 256 valori
-    pub fn compute_commitment(&mut self, pk: &PublicKey) -> VectorCommitment { 
-        let mut values_array = [[0u8; 48]; 256];
-        
-        for i in 0..256 {
-            match self.values[i] {
-                None => {}
-                Some(value) => {
-                    values_array[i] = value;
-                }
-            } 
-        }       
-        let commitment = commit_vector(&values_array, pk);  
-
-        self.commitment= Some(commitment);
-        commitment
     }
 }
 
 //------------------------------------------------------------
 // VERKLE TREE impl
 
-pub struct VerkleTree {
-    root: BranchNode,
-    pk: PublicKey,  
+pub struct VerkleTree{
+    root:BranchNode,
+    pk:PublicKey,  
 }
 
-impl VerkleTree {
-
-    pub fn new(pk: PublicKey) -> Self {
-        let mut root = BranchNode::new();
-        root.commitment = Some(commit_vector(&[[0u8; 48]; 256], &pk));
-        VerkleTree { root, pk }
+impl VerkleTree{
+    pub fn new(pk:PublicKey) -> Self {
+        let mut root=BranchNode::new();
+        root.commitment=Some(commit_vector(&[[0u8; 48]; 256], &pk));
+        VerkleTree {root, pk}
     }
 
     //recupero il commitment del tree
-    pub fn get_root_commitment(&self) -> Option<VectorCommitment> {
+    pub fn get_root_commitment(&self)->Option<VectorCommitment> {
         self.root.commitment
     }
 
-    pub fn getter_pk(&self) -> &PublicKey {
+    pub fn getter_pk(&self)->&PublicKey {
         &self.pk
     }
 
-    //NUOVO
     // converte 48 bytes in un commitment
-    fn deserialize_commitment(bytes: &[u8]) -> VectorCommitment {
+    fn deserialize_commitment(bytes: &[u8])->VectorCommitment {
         let affine = G1Affine::deserialize_compressed(bytes).unwrap();
         VectorCommitment {
             inner: affine.into(),
@@ -164,12 +108,12 @@ impl VerkleTree {
     }
 
    //recupera il valore associato a una chiave che la passo in input, se non esiste ritorna none
-    pub fn get(&self, key: &Key) -> Option<Value> {
+    pub fn get(&self, key:&Key)-> Option<Value> {
       
-        let stem = get_stem(key);
-        let suffix = get_suffix(key);
+        let stem=get_stem(key);
+        let suffix=get_suffix(key);
         
-        let mut current_node = &self.root;
+        let mut current_node=&self.root;
 
         for &byte in stem.iter() {
             //controlla se c'è un figlio all'indice 'byte'
@@ -177,11 +121,11 @@ impl VerkleTree {
                 None =>{
                          return None;
                 }
-                Some(NodeRef::Branch(branch)) => {
+                Some(NodeRef::Branch(branch))=>{
                     //navigo al branch successivo
                     current_node = branch;
                 }
-                Some(NodeRef::Stem(stem_node)) => {
+                Some(NodeRef::Stem(stem_node))=>{
                     return stem_node.values[suffix as usize];
                 }
             }
@@ -192,13 +136,13 @@ impl VerkleTree {
 
     //-------------------------------------INSERIMENTO--------------------------------------
     
-    pub fn insert(&mut self, key: Key, value: Value, ricalcola: bool) -> Vec<ModifyNode> {
-        let stem = get_stem(&key);
-        let suffix = get_suffix(&key);
+    pub fn insert(&mut self, key: Key, value: Value, ricalcola: bool)->Vec<ModifyNode>{
+        let stem=get_stem(&key);
+        let suffix=get_suffix(&key);
 
         if ricalcola {
-            let mut mods = Vec::new();
-            let pk = &self.pk;
+            let mut mods=Vec::new();
+            let pk=&self.pk;
             Self::insert_and_update(&mut self.root, &stem, 0, suffix, value, pk, String::new(), &mut mods);
             mods
         }else {
@@ -208,19 +152,19 @@ impl VerkleTree {
         }
     }
     
-    fn insert_recursive(node: &mut BranchNode, stem: &Stem, level: usize, suffix: u8, value: Value) {
-        let index = stem[level];
-        let child_index = index as usize;
+    fn insert_recursive(node: &mut BranchNode, stem:&Stem, level:usize, suffix:u8, value:Value) {
+        let index=stem[level];
+        let child_index=index as usize;
 
         match &mut node.children[child_index] {
         // se la posizione è vuota, bisogna creare il percorso
-            None => {
-                if level == 30 {
-                    let mut stem_node = StemNode::new(*stem);
-                    stem_node.values[suffix as usize] = Some(value);
-                    node.children[child_index] = Some(NodeRef::Stem(Box::new(stem_node)));
+            None=> {
+                if level==30 {
+                    let mut stem_node=StemNode::new(*stem);
+                    stem_node.values[suffix as usize]=Some(value);
+                    node.children[child_index]=Some(NodeRef::Stem(Box::new(stem_node)));
                 } else {
-                    let mut new_branch = Box::new(BranchNode::new());
+                    let mut new_branch=Box::new(BranchNode::new());
                     Self::insert_recursive(
                         &mut new_branch,
                         stem,
@@ -228,18 +172,18 @@ impl VerkleTree {
                         suffix,
                         value,
                     );
-                    node.children[child_index] = Some(NodeRef::Branch(new_branch));
+                    node.children[child_index]=Some(NodeRef::Branch(new_branch));
                 }
             }
 
             // esiste già un BranchNode, scendo ricorsivamente
-            Some(NodeRef::Branch(branch)) => {
+            Some(NodeRef::Branch(branch))=>{
                 Self::insert_recursive(branch, stem, level + 1, suffix, value)
             }
 
             // esiste già uno StemNode, aggiorno il valore
-            Some(NodeRef::Stem(stem_node)) => {
-                stem_node.values[suffix as usize] = Some(value);
+            Some(NodeRef::Stem(stem_node))=>{
+                stem_node.values[suffix as usize]=Some(value);
             }
         }
     }
@@ -247,9 +191,9 @@ impl VerkleTree {
 
 
     // chiamato solo una volta, all'avvio carica i commitment dal DB e li associa ai vari nodi dell'albero appena creato
-    pub fn load_commitments_from_db(&mut self,nodes: Vec<(String, String, Vec<u8>)>,) {
+    pub fn load_commitments_from_db(&mut self,nodes: Vec<(String, String, Vec<u8>)>,){
         for (path, _node_type, bytes) in nodes {
-            let commitment = Self::deserialize_commitment(&bytes);
+            let commitment=Self::deserialize_commitment(&bytes);
             self.set_commitment_at_path(&path, commitment);
         }
     }
@@ -258,42 +202,42 @@ impl VerkleTree {
     fn set_commitment_at_path(&mut self, path: &str, commitment: VectorCommitment) {
         // path vuoto = root
         if path.is_empty() {
-            self.root.commitment = Some(commitment);
+            self.root.commitment=Some(commitment);
             return;
         }
 
         // converte il path hex in indici es. "00aa" → [0, 170] 
-        let indices: Vec<usize> = (0..path.len())
+        let indices: Vec<usize>=(0..path.len())
             .step_by(2)
             .map(|i| usize::from_str_radix(&path[i..i+2], 16).unwrap())
             .collect();
 
-        let mut current = &mut self.root;
+        let mut current=&mut self.root;
 
         //il for scorre gli indici[0, 170] con enumerate, che aggiuge la posizione:
         //depth=0, idx=0 // depth=1, idx=1
         for (depth, &idx) in indices.iter().enumerate() {
-            let is_last = depth == indices.len() - 1;
+            let is_last= depth==indices.len()-1;
 
             if is_last {
                 match &mut current.children[idx] {
                     Some(NodeRef::Branch(branch)) => {
-                        branch.commitment = Some(commitment);
+                        branch.commitment=Some(commitment);
                     }
-                    Some(NodeRef::Stem(stem)) => {
-                        stem.commitment = Some(commitment);
+                    Some(NodeRef::Stem(stem))=> {
+                        stem.commitment=Some(commitment);
                     }
-                    None => {}
+                    None=>{}
                 }
                 return;
             }
 
             // scendi al prossimo livello
-            match &mut current.children[idx] {
-                Some(NodeRef::Branch(branch)) => {
-                    current = branch;
+            match &mut current.children[idx]{
+                Some(NodeRef::Branch(branch))=>{
+                    current=branch;
                 }
-                _ => return,
+                _ =>return,
             }
         }
     }
@@ -369,33 +313,7 @@ impl VerkleTree {
         });
 
     }
-    
-
-    pub fn debug_branch_di_stem(&self, key: &Key) {
-    let stem = get_stem(key);
-    let mut cur = &self.root;
-    for &b in stem.iter().take(30) {
-        match &cur.children[b as usize] {
-            Some(NodeRef::Branch(n)) => cur = n,
-            _ => { println!("percorso interrotto"); return; }
-        }
-    }
-    // cur = branch di livello 30, il padre dello stem
-    let mut vals = [[0u8; 48]; 256];
-    let mut figli = 0;
-    for i in 0..256 {
-        if let Some(NodeRef::Stem(s)) = &cur.children[i] {
-            figli += 1;
-            match s.commitment {
-                Some(c) => vals[i] = commitment_to_value(c),
-                None => println!("stem {:02x} senza commitment", i),
-            }
-        }
-    }
-    let ricalcolato = commit_vector(&vals, &self.pk);
-    println!("figli: {}, salvato == ricalcolato? {}",
-             figli, cur.commitment.map(|c| c.inner) == Some(ricalcolato.inner));
-}
+ 
 
     // metodo chiamato x calcolare la prova e "inviare" <x,y,w> 
     pub fn prove(&self, key: &Key) -> Option<MembershipProof> {
@@ -539,7 +457,7 @@ impl VerkleTree {
     if proof.value != proof.steps.first().unwrap().value { println!("FALLITO: valore del primo passo"); return false; }
 
     for i in 1..proof.steps.len() {
-        if proof.steps[i].value != commitment_to_value(proof.steps[i - 1].commitment) {
+        if proof.steps[i].value!=commitment_to_value(proof.steps[i - 1].commitment) {
             println!("FALLITO: catena tra passo {} e {}", i - 1, i);
             return false;
         }
@@ -553,12 +471,6 @@ impl VerkleTree {
     }
     true
 }
-
-
-        
-
-
-
 }
 
 
